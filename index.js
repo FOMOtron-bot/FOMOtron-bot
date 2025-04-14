@@ -89,6 +89,17 @@ async function getTokenInfo(token) {
     console.error('DexScreener fallback failed:', e.message);
   }
 
+  // 4. Try Birdeye
+  try {
+    const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
+    const data = await res.json();
+    if (data?.data?.name && data?.data?.symbol) {
+      return { name: data.data.name, symbol: data.data.symbol };
+    }
+  } catch (e) {
+    console.error('Birdeye fallback failed:', e.message);
+  }
+
   // Final fallback
   return { name: 'Unknown Token', symbol: short };
 }
@@ -117,23 +128,18 @@ async function getBuyTransactions(token) {
       const { name, symbol } = await getTokenInfo(token);
 
       const dexsRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
-      const dexsData = await dexsRes.json();
+      const dexsData = await res.json();
       const pair = dexsData?.pair || {};
       const marketCap = pair.fdv ? `$${parseInt(pair.fdv).toLocaleString()}` : 'N/A';
       const position = pair.rank ? `#${pair.rank}` : 'N/A';
       const txnLink = `https://solscan.io/tx/${signature}`;
 
       const message =
-        `💥 *${name} [${symbol}]* 🛒 *Buy!*
-\n` +
-        `🪙 *${solSpent} SOL*
-` +
-        `📦 *Got:* ${amountReceived} ${symbol}
-` +
-        `🔗 [Buyer | Txn](${txnLink})
-` +
-        `📊 *Position:* ${position}
-` +
+        `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
+        `🪙 *${solSpent} SOL*\n` +
+        `📦 *Got:* ${amountReceived} ${symbol}\n` +
+        `🔗 [Buyer | Txn](${txnLink})\n` +
+        `📊 *Position:* ${position}\n` +
         `💰 *Market Cap:* ${marketCap}`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
