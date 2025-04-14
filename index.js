@@ -126,9 +126,7 @@ async function getBuyTransactions(token) {
       const solSpent = (preSol - postSol) / 1e9;
       if (solSpent < 0.001) continue;
 
-      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
-      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
-
+      const amountReceived = tx.meta?.postTokenBalances?.find(b => b.mint === token)?.uiTokenAmount?.uiAmount || 'unknown';
       const { name, symbol } = await getTokenInfo(token);
       const txnLink = `https://solscan.io/tx/${signature}`;
 
