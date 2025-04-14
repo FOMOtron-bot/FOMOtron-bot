@@ -1,9 +1,10 @@
 import express from 'express';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'fs';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import bs58 from 'bs58';
 
 dotenv.config();
 
@@ -38,35 +39,26 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
 
 let lastCheckedSignature = null;
 
-async function getTokenInfo(mintAddress) {
+const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+async function getTokenMetadata(mintAddress) {
   try {
-    // Try token list first
-    const listRes = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json');
-    const tokenList = await listRes.json();
-    const match = tokenList.tokens.find(t => t.address === mintAddress);
-    if (match) return { symbol: match.symbol, name: match.name };
-
-    // Fallback: Try to get on-chain token metadata
     const mintPubkey = new PublicKey(mintAddress);
-    const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
-    const parsed = mintInfo?.value?.data?.parsed?.info;
+    const [metadataPDA] = await PublicKey.findProgramAddress(
+      [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
+      METADATA_PROGRAM_ID
+    );
 
-    const decimals = parsed?.decimals;
-    const supply = parsed?.supply;
-    const defaultSymbol = mintAddress.slice(0, 4) + '...' + mintAddress.slice(-4);
+    const metadataAccount = await connection.getAccountInfo(metadataPDA);
+    if (!metadataAccount) return null;
 
-    return {
-      symbol: defaultSymbol,
-      name: defaultSymbol,
-      decimals: decimals,
-      supply: supply
-    };
-  } catch (err) {
-    console.error('Token symbol fallback failed:', err.message);
-    return {
-      symbol: mintAddress.slice(0, 4) + '...' + mintAddress.slice(-4),
-      name: mintAddress.slice(0, 4) + '...' + mintAddress.slice(-4)
-    };
+    const data = metadataAccount.data;
+    const name = data.slice(1, 33).toString('utf8').replace(/\0/g, '').trim();
+    const symbol = data.slice(33, 43).toString('utf8').replace(/\0/g, '').trim();
+    return { name, symbol };
+  } catch (e) {
+    console.error('Metadata fetch failed:', e.message);
+    return null;
   }
 }
 
@@ -91,12 +83,17 @@ async function getBuyTransactions(token) {
       const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
       const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
 
-      const { name, symbol } = await getTokenInfo(token);
+      let symbol = token.slice(0, 4) + '...' + token.slice(-4);
+      let name = symbol;
+      const metadata = await getTokenMetadata(token);
+      if (metadata) {
+        symbol = metadata.symbol || symbol;
+        name = metadata.name || name;
+      }
 
       const dexsRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
       const dexsData = await dexsRes.json();
       const pair = dexsData?.pair || {};
-      const priceUsd = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
       const marketCap = pair.fdv ? `$${parseInt(pair.fdv).toLocaleString()}` : 'N/A';
       const position = pair.rank ? `#${pair.rank}` : 'N/A';
       const txnLink = `https://solscan.io/tx/${signature}`;
@@ -112,8 +109,7 @@ async function getBuyTransactions(token) {
 ` +
         `📊 *Position:* ${position}
 ` +
-        `💰 *Market Cap:* ${marketCap}
-`;
+        `💰 *Market Cap:* ${marketCap}`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
     }
