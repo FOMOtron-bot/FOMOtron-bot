@@ -7,8 +7,8 @@ import fetch from 'node-fetch';
 const app = express();
 const port = process.env.PORT || 10000;
 
-const bot = new TelegramBot('7774056523:AAHzkQZkzA1Kl3DQwi3e2WMVxkJaP0Ys2gQ', { polling: true });
-const TELEGRAM_CHAT_ID = '5405376313';
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const connection = new Connection('https://api.mainnet-beta.solana.com');
 const trackedTokensFile = './data/added_tokens.txt';
