@@ -108,25 +108,25 @@ async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
     const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
-    const lastSig = lastCheckedSignatures.get(token);
-    const now = Date.now();
+    const knownSignatures = lastCheckedSignatures.get(token) || new Set();
+    const newSignatures = new Set();
 
-    for (const signatureInfo of signatures.reverse()) {
-      const { signature, blockTime } = signatureInfo;
-      if (signature === lastSig) break;
-      if (!blockTime || (now - blockTime * 1000 > 30000)) continue; // older than 30 seconds
+    for (const { signature } of signatures.reverse()) {
+      if (knownSignatures.has(signature)) continue;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
 
       const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
-      const preSol = tx.meta?.preBalances?.[0] || 0;
-      const postSol = tx.meta?.postBalances?.[0] || 0;
+      const preSol = tx.meta.preBalances[0] || 0;
+      const postSol = tx.meta.postBalances[0] || 0;
       const solSpent = (preSol - postSol) / 1e9;
       if (solSpent < 0.001) continue;
 
-      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
-      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
+      const pre = tx.meta?.preTokenBalances?.find(b => b.mint === token);
+      const post = tx.meta?.postTokenBalances?.find(b => b.mint === token);
+      const amountReceived = (post?.uiTokenAmount?.uiAmount || 0) - (pre?.uiTokenAmount?.uiAmount || 0);
+      if (amountReceived <= 0) continue;
 
       const { name, symbol } = await getTokenInfo(token);
       const txnLink = `https://solscan.io/tx/${signature}`;
@@ -134,15 +134,14 @@ async function getBuyTransactions(token) {
       const message =
         `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
         `🪙 *${solSpent.toFixed(4)} SOL*\n` +
-        `📦 *Got:* ${amountReceived} ${symbol}\n` +
+        `📦 *Got:* ${amountReceived.toFixed(2)} ${symbol}\n` +
         `🔗 [Buyer | Txn](${txnLink})`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
+      newSignatures.add(signature);
     }
 
-    if (signatures.length > 0) {
-      lastCheckedSignatures.set(token, signatures[0].signature);
-    }
+    lastCheckedSignatures.set(token, new Set([...newSignatures, ...knownSignatures].slice(-20)));
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
   }
