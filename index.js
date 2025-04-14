@@ -1,10 +1,9 @@
 import express from 'express';
-import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'fs';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import bs58 from 'bs58';
 
 dotenv.config();
 
@@ -38,8 +37,11 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
   : [];
 
 let lastCheckedSignature = null;
-
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+function cleanString(buffer) {
+  return buffer.toString('utf8').replace(/\x00+$/, '').replace(/\x00/g, '').trim();
+}
 
 async function getTokenMetadata(mintAddress) {
   try {
@@ -53,11 +55,14 @@ async function getTokenMetadata(mintAddress) {
     if (!metadataAccount) return null;
 
     const data = metadataAccount.data;
-    const name = data.slice(1, 33).toString('utf8').replace(/\0/g, '').trim();
-    const symbol = data.slice(33, 43).toString('utf8').replace(/\0/g, '').trim();
+    const nameRaw = data.slice(1, 33);
+    const symbolRaw = data.slice(33, 43);
+
+    const name = cleanString(nameRaw);
+    const symbol = cleanString(symbolRaw);
     return { name, symbol };
   } catch (e) {
-    console.error('Metadata fetch failed:', e.message);
+    console.error('Metadata decode failed:', e.message);
     return null;
   }
 }
