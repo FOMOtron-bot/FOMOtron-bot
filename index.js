@@ -1,0 +1,88 @@
+import express from 'express';
+import { Connection, PublicKey } from '@solana/web3.js';
+import TelegramBot from 'node-telegram-bot-api';
+import fs from 'fs';
+import fetch from 'node-fetch';
+
+const app = express();
+const port = process.env.PORT || 10000;
+
+const bot = new TelegramBot('7774056523:AAHzkQZkzA1Kl3DQwi3e2WMVxkJaP0Ys2gQ', { polling: true });
+const TELEGRAM_CHAT_ID = '5405376313';
+
+const connection = new Connection('https://api.mainnet-beta.solana.com');
+const trackedTokensFile = './data/added_tokens.txt';
+
+let trackedTokens = fs.existsSync(trackedTokensFile)
+  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean)
+  : [];
+
+let lastCheckedSignature = null;
+
+async function getBuyTransactions(token) {
+  const tokenPubkey = new PublicKey(token);
+  const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
+
+  for (const signatureInfo of signatures.reverse()) {
+    const { signature } = signatureInfo;
+    if (lastCheckedSignature === signature) continue;
+    lastCheckedSignature = signature;
+
+    const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+    if (!tx || !tx.meta || tx.meta.err) continue;
+
+    const isBuy = tx.meta.postTokenBalances.some(balance =>
+      balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
+    );
+
+    if (isBuy) {
+      const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
+      const buyer = tx.transaction.message.accountKeys[0].toString();
+
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
+      const data = await res.json();
+      const name = data?.pair?.baseToken?.symbol || 'Unknown';
+      const link = `https://dexscreener.com/solana/${token}`;
+
+      await bot.sendMessage(TELEGRAM_CHAT_ID,
+        `🟢 *Buy Detected!*\nToken: *${name}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+  }
+}
+
+setInterval(() => {
+  trackedTokens.forEach(token => {
+    getBuyTransactions(token).catch(console.error);
+  });
+}, 15000);
+
+bot.onText(/\/add (.+)/, (msg, match) => {
+  const token = match[1];
+  if (!trackedTokens.includes(token)) {
+    trackedTokens.push(token);
+    fs.appendFileSync(trackedTokensFile, token + '\n');
+    bot.sendMessage(msg.chat.id, `✅ Token added: ${token}`);
+  } else {
+    bot.sendMessage(msg.chat.id, `⚠️ Token already being tracked.`);
+  }
+});
+
+bot.onText(/\/remove (.+)/, (msg, match) => {
+  const token = match[1];
+  trackedTokens = trackedTokens.filter(t => t !== token);
+  fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n'));
+  bot.sendMessage(msg.chat.id, `❌ Token removed: ${token}`);
+});
+
+bot.onText(/\/list/, (msg) => {
+  if (trackedTokens.length === 0) {
+    bot.sendMessage(msg.chat.id, 'No tokens are currently being tracked.');
+  } else {
+    bot.sendMessage(msg.chat.id, `Currently tracking:\n${trackedTokens.join('\n')}`);
+  }
+});
+
+app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
+app.listen(port, () => console.log(`Bot server live on port ${port}`));
