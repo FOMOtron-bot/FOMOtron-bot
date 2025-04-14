@@ -40,31 +40,57 @@ let lastCheckedSignature = null;
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 function cleanString(buffer) {
-  return buffer.toString('utf8').replace(/\x00+$/, '').replace(/\x00/g, '').trim();
+  return buffer.toString('utf8').replace(/\0/g, '').trim();
 }
 
-async function getTokenMetadata(mintAddress) {
+function isGibberish(str) {
+  return !str || /[^\x20-\x7E]/.test(str) || str.length < 1 || str.length > 32;
+}
+
+async function getTokenInfo(token) {
+  // 1. Try Solana Token List
   try {
-    const mintPubkey = new PublicKey(mintAddress);
+    const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
+      .then(res => res.json());
+    const found = tokenList.tokens.find(t => t.address === token);
+    if (found) return { name: found.name, symbol: found.symbol };
+  } catch (e) {
+    console.error('Token list failed:', e.message);
+  }
+
+  // 2. Try Metaplex Metadata
+  try {
+    const mintPubkey = new PublicKey(token);
     const [metadataPDA] = await PublicKey.findProgramAddress(
-      [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
+      [Buffer.from('metadata'), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
       METADATA_PROGRAM_ID
     );
-
     const metadataAccount = await connection.getAccountInfo(metadataPDA);
-    if (!metadataAccount) return null;
-
-    const data = metadataAccount.data;
-    const nameRaw = data.slice(1, 33);
-    const symbolRaw = data.slice(33, 43);
-
-    const name = cleanString(nameRaw);
-    const symbol = cleanString(symbolRaw);
-    return { name, symbol };
+    if (metadataAccount) {
+      const data = metadataAccount.data;
+      const nameRaw = data.slice(1, 33);
+      const symbolRaw = data.slice(33, 43);
+      const name = cleanString(nameRaw);
+      const symbol = cleanString(symbolRaw);
+      if (!isGibberish(name) && !isGibberish(symbol)) return { name, symbol };
+    }
   } catch (e) {
-    console.error('Metadata decode failed:', e.message);
-    return null;
+    console.error('Metaplex metadata failed:', e.message);
   }
+
+  // 3. Try DexScreener
+  try {
+    const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
+    const data = await res.json();
+    const pair = data?.pair?.baseToken;
+    if (pair?.name && pair?.symbol) return { name: pair.name, symbol: pair.symbol };
+  } catch (e) {
+    console.error('DexScreener fallback failed:', e.message);
+  }
+
+  // Final fallback to short token
+  const fallback = token.slice(0, 4) + '...' + token.slice(-4);
+  return { name: fallback, symbol: fallback };
 }
 
 async function getBuyTransactions(token) {
@@ -88,13 +114,7 @@ async function getBuyTransactions(token) {
       const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
       const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
 
-      let symbol = token.slice(0, 4) + '...' + token.slice(-4);
-      let name = symbol;
-      const metadata = await getTokenMetadata(token);
-      if (metadata) {
-        symbol = metadata.symbol || symbol;
-        name = metadata.name || name;
-      }
+      const { name, symbol } = await getTokenInfo(token);
 
       const dexsRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
       const dexsData = await dexsRes.json();
