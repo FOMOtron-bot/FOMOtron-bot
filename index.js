@@ -14,20 +14,6 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL;
 const RPC_URL = process.env.SOLANA_RPC_URL;
 
-const trackedTokensFile = './data/added_tokens.txt';
-const lastSignatureFile = './data/last_signatures.json';
-
-let trackedTokens = fs.existsSync(trackedTokensFile)
-  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean).map(t => t.trim())
-  : [];
-
-let lastCheckedSignatures = fs.existsSync(lastSignatureFile)
-  ? JSON.parse(fs.readFileSync(lastSignatureFile, 'utf-8'))
-  : {};
-
-const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-const connection = new Connection(RPC_URL);
-
 let bot;
 
 if (WEBHOOK_URL) {
@@ -42,6 +28,16 @@ if (WEBHOOK_URL) {
   bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
   console.log(`🛠️ Bot running in POLLING mode`);
 }
+
+const connection = new Connection(RPC_URL);
+const trackedTokensFile = './data/added_tokens.txt';
+
+let trackedTokens = fs.existsSync(trackedTokensFile)
+  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean).map(t => t.trim())
+  : [];
+
+const lastSignatures = {};
+const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 function cleanString(buffer) {
   return buffer.toString('utf8').replace(/\0/g, '').trim();
@@ -62,14 +58,13 @@ async function getTokenInfo(token) {
     const data = await res.json();
     const pair = data.pairs?.[0]?.baseToken;
     if (pair?.name && pair?.symbol) return { name: pair.name, symbol: pair.symbol };
-  } catch {}
+  } catch (e) { console.error('DexScreener token endpoint failed:', e.message); }
 
   try {
-    const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
-      .then(res => res.json());
+    const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json').then(res => res.json());
     const found = tokenList.tokens.find(t => t.address === token);
     if (found) return { name: found.name, symbol: found.symbol };
-  } catch {}
+  } catch (e) { console.error('Token list failed:', e.message); }
 
   try {
     const mintPubkey = new PublicKey(token);
@@ -80,17 +75,21 @@ async function getTokenInfo(token) {
     const metadataAccount = await connection.getAccountInfo(metadataPDA);
     if (metadataAccount) {
       const data = metadataAccount.data;
-      const name = cleanString(data.slice(1, 33));
-      const symbol = cleanString(data.slice(33, 43));
+      const nameRaw = data.slice(1, 33);
+      const symbolRaw = data.slice(33, 43);
+      let name = cleanString(nameRaw);
+      let symbol = cleanString(symbolRaw);
       if (!isGibberish(name) && !isGibberish(symbol)) return { name, symbol };
     }
-  } catch {}
+  } catch (e) { console.error('Metaplex metadata failed:', e.message); }
 
   try {
     const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
     const data = await res.json();
-    if (data?.data?.name && data?.data?.symbol) return { name: data.data.name, symbol: data.data.symbol };
-  } catch {}
+    if (data?.data?.name && data?.data?.symbol) {
+      return { name: data.data.name, symbol: data.data.symbol };
+    }
+  } catch (e) { console.error('Birdeye fallback failed:', e.message); }
 
   return { name: 'Unverified', symbol: short };
 }
@@ -98,24 +97,12 @@ async function getTokenInfo(token) {
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
-    let before = undefined;
-    let signatures = [];
+    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
 
-    while (true) {
-      const batch = await connection.getSignaturesForAddress(tokenPubkey, { before, limit: 10 });
-      if (!batch.length) break;
-      before = batch[batch.length - 1].signature;
-      for (let sig of batch) {
-        if (sig.signature === lastCheckedSignatures[token]) break;
-        signatures.push(sig);
-      }
-      if (batch.some(sig => sig.signature === lastCheckedSignatures[token])) break;
-    }
-
-    for (const sig of signatures.reverse()) {
-      const signature = sig.signature;
-      lastCheckedSignatures[token] = signature;
-      fs.writeFileSync(lastSignatureFile, JSON.stringify(lastCheckedSignatures, null, 2));
+    for (const signatureInfo of signatures.reverse()) {
+      const { signature } = signatureInfo;
+      if (lastSignatures[token] === signature) continue;
+      lastSignatures[token] = signature;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -126,14 +113,20 @@ async function getBuyTransactions(token) {
       const solSpent = (preSol - postSol) / 1e9;
       if (solSpent < 0.001) continue;
 
-      const amountReceived = tx.meta?.postTokenBalances?.find(b => b.mint === token)?.uiTokenAmount?.uiAmount || 'unknown';
+      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
+      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
+
       const { name, symbol } = await getTokenInfo(token);
       const txnLink = `https://solscan.io/tx/${signature}`;
 
       const message =
-        `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
-        `🪙 *${solSpent.toFixed(4)} SOL*\n` +
-        `📦 *Got:* ${amountReceived} ${symbol}\n` +
+        `💥 *${name} [${symbol}]* 🛒 *Buy!*
+
+` +
+        `🪙 *${solSpent.toFixed(4)} SOL*
+` +
+        `📦 *Got:* ${amountReceived} ${symbol}
+` +
         `🔗 [Buyer | Txn](${txnLink})`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
@@ -149,22 +142,11 @@ setInterval(() => {
   });
 }, 3000);
 
-bot.onText(/\/add (.+)/, async (msg, match) => {
+bot.onText(/\/add (.+)/, (msg, match) => {
   const token = match[1].trim();
   if (!trackedTokens.includes(token)) {
     trackedTokens.push(token);
     fs.appendFileSync(trackedTokensFile, token + '\n');
-
-    try {
-      const sigs = await connection.getSignaturesForAddress(new PublicKey(token), { limit: 1 });
-      if (sigs[0]?.signature) {
-        lastCheckedSignatures[token] = sigs[0].signature;
-        fs.writeFileSync(lastSignatureFile, JSON.stringify(lastCheckedSignatures, null, 2));
-      }
-    } catch (e) {
-      console.error(`Could not get last signature for ${token}:`, e.message);
-    }
-
     bot.sendMessage(msg.chat.id, `✅ Token added: ${token}`);
   } else {
     bot.sendMessage(msg.chat.id, `⚠️ Token already being tracked.`);
@@ -172,13 +154,12 @@ bot.onText(/\/add (.+)/, async (msg, match) => {
 });
 
 bot.onText(/\/remove (.+)/, (msg, match) => {
-  const token = match[1].trim();
-  if (trackedTokens.includes(token)) {
-    trackedTokens = trackedTokens.filter(t => t !== token);
+  const tokenToRemove = match[1].trim();
+  if (trackedTokens.includes(tokenToRemove)) {
+    trackedTokens = trackedTokens.filter(t => t !== tokenToRemove);
     fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n') + '\n');
-    delete lastCheckedSignatures[token];
-    fs.writeFileSync(lastSignatureFile, JSON.stringify(lastCheckedSignatures, null, 2));
-    bot.sendMessage(msg.chat.id, `❌ Token removed: ${token}`);
+    delete lastSignatures[tokenToRemove];
+    bot.sendMessage(msg.chat.id, `❌ Token removed: ${tokenToRemove}`);
   } else {
     bot.sendMessage(msg.chat.id, `⚠️ Token not found in tracked list.`);
   }
@@ -195,3 +176,4 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
+
