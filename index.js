@@ -13,11 +13,9 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL;
 
-// Create the Telegram bot (dynamic mode)
 let bot;
 
 if (WEBHOOK_URL) {
-  // Webhook mode (Render)
   bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
   bot.setWebHook(`${WEBHOOK_URL}/bot${TELEGRAM_BOT_TOKEN}`);
   app.post(`/bot${TELEGRAM_BOT_TOKEN}`, express.json(), (req, res) => {
@@ -26,7 +24,6 @@ if (WEBHOOK_URL) {
   });
   console.log(`🚀 Bot running in WEBHOOK mode at ${WEBHOOK_URL}/bot${TELEGRAM_BOT_TOKEN}`);
 } else {
-  // Polling mode (local dev)
   bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
   console.log(`🛠️ Bot running in POLLING mode`);
 }
@@ -39,6 +36,19 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
   : [];
 
 let lastCheckedSignature = null;
+
+// 🔍 Pull token symbol from the official Solana token list
+async function getTokenName(mint) {
+  try {
+    const res = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json');
+    const data = await res.json();
+    const token = data.tokens.find(t => t.address === mint);
+    return token?.symbol || 'Unknown';
+  } catch (err) {
+    console.error("Token name lookup failed:", err.message);
+    return 'Unknown';
+  }
+}
 
 async function getBuyTransactions(token) {
   try {
@@ -60,10 +70,7 @@ async function getBuyTransactions(token) {
       if (isBuy) {
         const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
         const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
-
-        const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
-        const data = await res.json();
-        const name = data?.pair?.baseToken?.symbol || 'Unknown';
+        const name = await getTokenName(token);
         const link = `https://dexscreener.com/solana/${token}`;
 
         await bot.sendMessage(TELEGRAM_CHAT_ID,
@@ -109,8 +116,6 @@ bot.onText(/\/list/, (msg) => {
   }
 });
 
-// Web routes for Render health checks
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
-
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
