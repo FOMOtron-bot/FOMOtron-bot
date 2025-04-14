@@ -128,7 +128,7 @@ async function getBuyTransactions(token) {
       const { name, symbol } = await getTokenInfo(token);
 
       const dexsRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
-      const dexsData = await res.json();
+      const dexsData = await dexsRes.json();
       const pair = dexsData?.pair || {};
       const marketCap = pair.fdv ? `$${parseInt(pair.fdv).toLocaleString()}` : 'N/A';
       const position = pair.rank ? `#${pair.rank}` : 'N/A';
