@@ -36,7 +36,7 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
   ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean).map(t => t.trim())
   : [];
 
-let lastCheckedSignature = null;
+const lastCheckedSignatures = new Map();
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 function cleanString(buffer) {
@@ -54,7 +54,6 @@ function looksLikeAddress(str) {
 async function getTokenInfo(token) {
   const short = token.slice(0, 4).toUpperCase();
 
-  // 1. DexScreener token endpoint
   try {
     const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
     const data = await res.json();
@@ -64,7 +63,6 @@ async function getTokenInfo(token) {
     console.error('DexScreener token endpoint failed:', e.message);
   }
 
-  // 2. Solana Token List
   try {
     const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
       .then(res => res.json());
@@ -74,7 +72,6 @@ async function getTokenInfo(token) {
     console.error('Token list failed:', e.message);
   }
 
-  // 3. Metaplex Metadata
   try {
     const mintPubkey = new PublicKey(token);
     const [metadataPDA] = await PublicKey.findProgramAddress(
@@ -94,7 +91,6 @@ async function getTokenInfo(token) {
     console.error('Metaplex metadata failed:', e.message);
   }
 
-  // 4. Birdeye fallback
   try {
     const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
     const data = await res.json();
@@ -112,37 +108,48 @@ async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
     const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
+    const lastSig = lastCheckedSignatures.get(token);
 
     for (const signatureInfo of signatures.reverse()) {
       const { signature } = signatureInfo;
-      if (lastCheckedSignature === signature) continue;
-      lastCheckedSignature = signature;
+      if (signature === lastSig) break;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
 
-      const isBuy = tx.meta?.postTokenBalances?.some(balance =>
-        balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
-      );
+      const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+      const preSol = tx.meta?.preBalances?.[0] || 0;
+      const postSol = tx.meta?.postBalances?.[0] || 0;
+      const solSpent = (preSol - postSol) / 1e9;
+      if (solSpent < 0.001) continue;
 
-      if (isBuy) {
-        const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
-        const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
-        const { name, symbol } = await getTokenInfo(token);
-        const link = `https://dexscreener.com/solana/${token}`;
+      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
+      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
 
-        await bot.sendMessage(TELEGRAM_CHAT_ID,
-          `🟢 *Buy Detected!*\nToken: *${name}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
-          { parse_mode: 'Markdown' }
-        );
-      }
+      const { name, symbol } = await getTokenInfo(token);
+      const txnLink = `https://solscan.io/tx/${signature}`;
+
+      const message =
+        `💥 *${name} [${symbol}]* 🛒 *Buy!*
+
+` +
+        `🪙 *${solSpent.toFixed(4)} SOL*
+` +
+        `📦 *Got:* ${amountReceived} ${symbol}
+` +
+        `🔗 [Buyer | Txn](${txnLink})`;
+
+      await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
+    }
+
+    if (signatures.length > 0) {
+      lastCheckedSignatures.set(token, signatures[0].signature);
     }
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
   }
 }
 
-// Run every 3 seconds
 setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
@@ -178,3 +185,4 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
+
