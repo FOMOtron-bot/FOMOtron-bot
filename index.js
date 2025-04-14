@@ -51,17 +51,6 @@ function looksLikeAddress(str) {
   return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
 }
 
-async function getSolPrice() {
-  try {
-    const res = await fetch('https://price.jup.ag/v4/price?ids=SOL');
-    const json = await res.json();
-    return json.data.SOL.price;
-  } catch (e) {
-    console.error("Failed to fetch SOL price:", e.message);
-    return 0;
-  }
-}
-
 async function getTokenInfo(token) {
   const short = token.slice(0, 4).toUpperCase();
 
@@ -121,7 +110,6 @@ async function getBuyTransactions(token) {
     const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
     const lastSig = lastCheckedSignatures.get(token);
     const now = Date.now();
-    const solPrice = await getSolPrice();
 
     for (const signatureInfo of signatures.reverse()) {
       const { signature, blockTime } = signatureInfo;
@@ -135,8 +123,7 @@ async function getBuyTransactions(token) {
       const preSol = tx.meta?.preBalances?.[0] || 0;
       const postSol = tx.meta?.postBalances?.[0] || 0;
       const solSpent = (preSol - postSol) / 1e9;
-      const usdSpent = solSpent * solPrice;
-      if (usdSpent < 10) continue;
+      if (solSpent < 0.001) continue;
 
       const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
       const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
@@ -146,7 +133,7 @@ async function getBuyTransactions(token) {
 
       const message =
         `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
-        `🪙 *${solSpent.toFixed(4)} SOL (~$${usdSpent.toFixed(2)})*\n` +
+        `🪙 *${solSpent.toFixed(4)} SOL*\n` +
         `📦 *Got:* ${amountReceived} ${symbol}\n` +
         `🔗 [Buyer | Txn](${txnLink})`;
 
