@@ -48,6 +48,7 @@ function isGibberish(str) {
 }
 
 async function getTokenInfo(token) {
+  const short = token.slice(0, 4).toUpperCase();
   // 1. Try Solana Token List
   try {
     const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
@@ -70,8 +71,8 @@ async function getTokenInfo(token) {
       const data = metadataAccount.data;
       const nameRaw = data.slice(1, 33);
       const symbolRaw = data.slice(33, 43);
-      const name = cleanString(nameRaw);
-      const symbol = cleanString(symbolRaw);
+      let name = cleanString(nameRaw);
+      let symbol = cleanString(symbolRaw);
       if (!isGibberish(name) && !isGibberish(symbol)) return { name, symbol };
     }
   } catch (e) {
@@ -88,9 +89,8 @@ async function getTokenInfo(token) {
     console.error('DexScreener fallback failed:', e.message);
   }
 
-  // Final fallback to short token
-  const fallback = token.slice(0, 4) + '...' + token.slice(-4);
-  return { name: fallback, symbol: fallback };
+  // Final fallback
+  return { name: 'Unlisted Token', symbol: short };
 }
 
 async function getBuyTransactions(token) {
@@ -150,7 +150,7 @@ setInterval(() => {
 }, 3000);
 
 bot.onText(/\/add (.+)/, (msg, match) => {
-  const token = match[1];
+  const token = match[1].trim();
   if (!trackedTokens.includes(token)) {
     trackedTokens.push(token);
     fs.appendFileSync(trackedTokensFile, token + '\n');
@@ -161,8 +161,8 @@ bot.onText(/\/add (.+)/, (msg, match) => {
 });
 
 bot.onText(/\/remove (.+)/, (msg, match) => {
-  const token = match[1];
-  trackedTokens = trackedTokens.filter(t => t !== token);
+  const token = match[1].trim();
+  trackedTokens = trackedTokens.filter(t => t.trim() !== token);
   fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n'));
   bot.sendMessage(msg.chat.id, `❌ Token removed: ${token}`);
 });
