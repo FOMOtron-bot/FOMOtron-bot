@@ -69,13 +69,17 @@ async function getBuyTransactions(token) {
       );
 
       if (isBuy) {
-        const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
         const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+
+        const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
+        const amount = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
+
         const name = await getTokenName(token);
+        const displayName = name !== 'Unknown' ? name : token.slice(0, 4) + '...' + token.slice(-4);
         const link = `https://dexscreener.com/solana/${token}`;
 
         await bot.sendMessage(TELEGRAM_CHAT_ID,
-          `🟢 *Buy Detected!*\nToken: *${name}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
+          `🟢 *Buy Detected!*\nToken: *${displayName}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
           { parse_mode: 'Markdown' }
         );
       }
@@ -121,3 +125,4 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
+
