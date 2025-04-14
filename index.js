@@ -107,12 +107,16 @@ async function getTokenInfo(token) {
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
-    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
+    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 20 });
     const lastSig = lastCheckedSignatures.get(token);
+    let latestSignature = null;
 
     for (const signatureInfo of signatures.reverse()) {
-      const { signature } = signatureInfo;
+      const { signature, blockTime } = signatureInfo;
       if (signature === lastSig) break;
+
+      const now = Math.floor(Date.now() / 1000);
+      if (blockTime && now - blockTime > 30) continue;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -130,20 +134,17 @@ async function getBuyTransactions(token) {
       const txnLink = `https://solscan.io/tx/${signature}`;
 
       const message =
-        `💥 *${name} [${symbol}]* 🛒 *Buy!*
-
-` +
-        `🪙 *${solSpent.toFixed(4)} SOL*
-` +
-        `📦 *Got:* ${amountReceived} ${symbol}
-` +
+        `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
+        `🪙 *${solSpent.toFixed(4)} SOL*\n` +
+        `📦 *Got:* ${amountReceived} ${symbol}\n` +
         `🔗 [Buyer | Txn](${txnLink})`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
+      latestSignature = signature;
     }
 
-    if (signatures.length > 0) {
-      lastCheckedSignatures.set(token, signatures[0].signature);
+    if (latestSignature) {
+      lastCheckedSignatures.set(token, latestSignature);
     }
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
