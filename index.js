@@ -49,12 +49,23 @@ function isGibberish(str) {
 
 async function getTokenInfo(token) {
   const short = token.slice(0, 4).toUpperCase();
+
+  function looksLikeAddress(str) {
+    return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
+  }
+
   // 1. Try Solana Token List
   try {
     const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
       .then(res => res.json());
     const found = tokenList.tokens.find(t => t.address === token);
-    if (found) return { name: found.name, symbol: found.symbol };
+    if (found) {
+      let name = found.name;
+      let symbol = found.symbol;
+      if (looksLikeAddress(name)) name = 'Unverified';
+      if (looksLikeAddress(symbol)) symbol = short;
+      return { name, symbol };
+    }
   } catch (e) {
     console.error('Token list failed:', e.message);
   }
@@ -73,7 +84,11 @@ async function getTokenInfo(token) {
       const symbolRaw = data.slice(33, 43);
       let name = cleanString(nameRaw);
       let symbol = cleanString(symbolRaw);
-      if (!isGibberish(name) && !isGibberish(symbol)) return { name, symbol };
+      if (!isGibberish(name) && !isGibberish(symbol)) {
+        if (looksLikeAddress(name)) name = 'Unverified';
+        if (looksLikeAddress(symbol)) symbol = short;
+        return { name, symbol };
+      }
     }
   } catch (e) {
     console.error('Metaplex metadata failed:', e.message);
@@ -84,7 +99,13 @@ async function getTokenInfo(token) {
     const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
     const data = await res.json();
     const pair = data?.pair?.baseToken;
-    if (pair?.name && pair?.symbol) return { name: pair.name, symbol: pair.symbol };
+    if (pair?.name && pair?.symbol) {
+      let name = pair.name;
+      let symbol = pair.symbol;
+      if (looksLikeAddress(name)) name = 'Unverified';
+      if (looksLikeAddress(symbol)) symbol = short;
+      return { name, symbol };
+    }
   } catch (e) {
     console.error('DexScreener fallback failed:', e.message);
   }
@@ -94,14 +115,19 @@ async function getTokenInfo(token) {
     const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
     const data = await res.json();
     if (data?.data?.name && data?.data?.symbol) {
-      return { name: data.data.name, symbol: data.data.symbol };
+      let name = data.data.name;
+      let symbol = data.data.symbol;
+      if (looksLikeAddress(name)) name = 'Unverified';
+      if (looksLikeAddress(symbol)) symbol = short;
+      return { name, symbol };
     }
   } catch (e) {
     console.error('Birdeye fallback failed:', e.message);
   }
 
   // Final fallback
-  return { name: 'Unknown Token', symbol: short };
+  return { name: 'Unverified', symbol: short };
+}
 }
 
 async function getBuyTransactions(token) {
@@ -168,9 +194,15 @@ bot.onText(/\/add (.+)/, (msg, match) => {
 
 bot.onText(/\/remove (.+)/, (msg, match) => {
   const tokenToRemove = match[1].trim();
-  trackedTokens = trackedTokens.map(t => t.trim()).filter(t => t !== tokenToRemove);
-  fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n'));
-  bot.sendMessage(msg.chat.id, `❌ Token removed: ${tokenToRemove}`);
+  if (trackedTokens.includes(tokenToRemove)) {
+    trackedTokens = trackedTokens.filter(t => t !== tokenToRemove);
+    fs.writeFileSync(trackedTokensFile, trackedTokens.join('
+') + '
+');
+    bot.sendMessage(msg.chat.id, `❌ Token removed: ${tokenToRemove}`);
+  } else {
+    bot.sendMessage(msg.chat.id, `⚠️ Token not found in tracked list.`);
+  }
 });
 
 bot.onText(/\/list/, (msg) => {
