@@ -134,11 +134,21 @@ setInterval(() => {
   });
 }, 3000);
 
-bot.onText(/\/add (.+)/, (msg, match) => {
+bot.onText(/\/add (.+)/, async (msg, match) => {
   const token = match[1].trim();
   if (!trackedTokens.includes(token)) {
     trackedTokens.push(token);
     fs.appendFileSync(trackedTokensFile, token + '\n');
+    try {
+      const tokenPubkey = new PublicKey(token);
+      const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 1 });
+      if (signatures[0]?.signature) {
+        lastCheckedSignatures[token] = signatures[0].signature;
+        fs.writeFileSync(lastSignatureFile, JSON.stringify(lastCheckedSignatures, null, 2));
+      }
+    } catch (e) {
+      console.error(`Unable to initialize last signature for ${token}:`, e.message);
+    }
     bot.sendMessage(msg.chat.id, `✅ Token added: ${token}`);
   } else {
     bot.sendMessage(msg.chat.id, `⚠️ Token already being tracked.`);
