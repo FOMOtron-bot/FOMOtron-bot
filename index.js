@@ -3,6 +3,9 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'fs';
 import fetch from 'node-fetch';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 10000;
