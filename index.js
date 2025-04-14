@@ -9,9 +9,27 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 10000;
-
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL;
+
+// Create the Telegram bot (dynamic mode)
+let bot;
+
+if (WEBHOOK_URL) {
+  // Webhook mode (Render)
+  bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
+  bot.setWebHook(`${WEBHOOK_URL}/bot${TELEGRAM_BOT_TOKEN}`);
+  app.post(`/bot${TELEGRAM_BOT_TOKEN}`, express.json(), (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+  });
+  console.log(`🚀 Bot running in WEBHOOK mode at ${WEBHOOK_URL}/bot${TELEGRAM_BOT_TOKEN}`);
+} else {
+  // Polling mode (local dev)
+  bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+  console.log(`🛠️ Bot running in POLLING mode`);
+}
 
 const connection = new Connection('https://api.mainnet-beta.solana.com');
 const trackedTokensFile = './data/added_tokens.txt';
@@ -95,4 +113,4 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 
-app.listen(port, () => console.log(`Bot server live on port ${port}`));
+app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
