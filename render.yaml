@@ -1,14 +1,17 @@
 services:
   - type: web
     name: fomotron-bot
-    env: node
+    runtime: node
+    region: oregon
+    plan: free
     buildCommand: npm install
     startCommand: npm start
-    plan: free
+    autoDeploy: true
+    branch: main
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
+        sync: false  # Set manually in Render dashboard
       - key: TELEGRAM_CHAT_ID
-        sync: false
+        sync: false  # Set manually in Render dashboard
       - key: PORT
         value: 10000
