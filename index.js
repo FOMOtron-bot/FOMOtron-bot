@@ -51,6 +51,17 @@ function looksLikeAddress(str) {
   return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
 }
 
+async function getSolPrice() {
+  try {
+    const res = await fetch('https://price.jup.ag/v4/price?ids=SOL');
+    const json = await res.json();
+    return json.data.SOL.price;
+  } catch (e) {
+    console.error("Failed to fetch SOL price:", e.message);
+    return 0;
+  }
+}
+
 async function getTokenInfo(token) {
   const short = token.slice(0, 4).toUpperCase();
 
@@ -104,17 +115,6 @@ async function getTokenInfo(token) {
   return { name: 'Unverified', symbol: short };
 }
 
-async function getSolPrice() {
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-    const data = await res.json();
-    return data?.solana?.usd || 0;
-  } catch (e) {
-    console.error('Failed to fetch SOL price:', e.message);
-    return 0;
-  }
-}
-
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
@@ -126,7 +126,7 @@ async function getBuyTransactions(token) {
     for (const signatureInfo of signatures.reverse()) {
       const { signature, blockTime } = signatureInfo;
       if (signature === lastSig) break;
-      if (!blockTime || (now - blockTime * 1000 > 60000)) continue;
+      if (!blockTime || (now - blockTime * 1000 > 60000)) continue; // older than 60 seconds
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
