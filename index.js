@@ -33,65 +33,22 @@ const connection = new Connection(RPC_URL);
 const trackedTokensFile = './data/added_tokens.txt';
 
 let trackedTokens = fs.existsSync(trackedTokensFile)
-  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean).map(t => t.trim())
+  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean)
   : [];
 
-const lastSignatures = {};
-const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+let lastCheckedSignature = null;
 
-function cleanString(buffer) {
-  return buffer.toString('utf8').replace(/\0/g, '').trim();
-}
-
-function isGibberish(str) {
-  return !str || /[^\x20-\x7E]/.test(str) || str.length < 1 || str.length > 32;
-}
-
-function looksLikeAddress(str) {
-  return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
-}
-
-async function getTokenInfo(token) {
-  const short = token.slice(0, 4).toUpperCase();
+// 🔍 Pull token symbol from the official Solana token list
+async function getTokenName(mint) {
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
+    const res = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json');
     const data = await res.json();
-    const pair = data.pairs?.[0]?.baseToken;
-    if (pair?.name && pair?.symbol) return { name: pair.name, symbol: pair.symbol };
-  } catch (e) { console.error('DexScreener token endpoint failed:', e.message); }
-
-  try {
-    const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json').then(res => res.json());
-    const found = tokenList.tokens.find(t => t.address === token);
-    if (found) return { name: found.name, symbol: found.symbol };
-  } catch (e) { console.error('Token list failed:', e.message); }
-
-  try {
-    const mintPubkey = new PublicKey(token);
-    const [metadataPDA] = await PublicKey.findProgramAddress(
-      [Buffer.from('metadata'), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
-      METADATA_PROGRAM_ID
-    );
-    const metadataAccount = await connection.getAccountInfo(metadataPDA);
-    if (metadataAccount) {
-      const data = metadataAccount.data;
-      const nameRaw = data.slice(1, 33);
-      const symbolRaw = data.slice(33, 43);
-      let name = cleanString(nameRaw);
-      let symbol = cleanString(symbolRaw);
-      if (!isGibberish(name) && !isGibberish(symbol)) return { name, symbol };
-    }
-  } catch (e) { console.error('Metaplex metadata failed:', e.message); }
-
-  try {
-    const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
-    const data = await res.json();
-    if (data?.data?.name && data?.data?.symbol) {
-      return { name: data.data.name, symbol: data.data.symbol };
-    }
-  } catch (e) { console.error('Birdeye fallback failed:', e.message); }
-
-  return { name: 'Unverified', symbol: short };
+    const token = data.tokens.find(t => t.address === mint);
+    return token?.symbol || 'Unknown';
+  } catch (err) {
+    console.error("Token name lookup failed:", err.message);
+    return 'Unknown';
+  }
 }
 
 async function getBuyTransactions(token) {
@@ -101,41 +58,34 @@ async function getBuyTransactions(token) {
 
     for (const signatureInfo of signatures.reverse()) {
       const { signature } = signatureInfo;
-      if (lastSignatures[token] === signature) continue;
-      lastSignatures[token] = signature;
+      if (lastCheckedSignature === signature) continue;
+      lastCheckedSignature = signature;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
 
-      const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
-      const preSol = tx.meta?.preBalances?.[0] || 0;
-      const postSol = tx.meta?.postBalances?.[0] || 0;
-      const solSpent = (preSol - postSol) / 1e9;
-      if (solSpent < 0.001) continue;
+      const isBuy = tx.meta?.postTokenBalances?.some(balance =>
+        balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
+      );
 
-      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
-      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
+      if (isBuy) {
+        const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
+        const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+        const name = await getTokenName(token);
+        const link = `https://dexscreener.com/solana/${token}`;
 
-      const { name, symbol } = await getTokenInfo(token);
-      const txnLink = `https://solscan.io/tx/${signature}`;
-
-      const message =
-        `💥 *${name} [${symbol}]* 🛒 *Buy!*
-
-` +
-        `🪙 *${solSpent.toFixed(4)} SOL*
-` +
-        `📦 *Got:* ${amountReceived} ${symbol}
-` +
-        `🔗 [Buyer | Txn](${txnLink})`;
-
-      await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
+        await bot.sendMessage(TELEGRAM_CHAT_ID,
+          `🟢 *Buy Detected!*\nToken: *${name}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
+          { parse_mode: 'Markdown' }
+        );
+      }
     }
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
   }
 }
 
+// ⏱ Faster buy check (every 3 seconds)
 setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
@@ -143,7 +93,7 @@ setInterval(() => {
 }, 3000);
 
 bot.onText(/\/add (.+)/, (msg, match) => {
-  const token = match[1].trim();
+  const token = match[1];
   if (!trackedTokens.includes(token)) {
     trackedTokens.push(token);
     fs.appendFileSync(trackedTokensFile, token + '\n');
@@ -154,15 +104,10 @@ bot.onText(/\/add (.+)/, (msg, match) => {
 });
 
 bot.onText(/\/remove (.+)/, (msg, match) => {
-  const tokenToRemove = match[1].trim();
-  if (trackedTokens.includes(tokenToRemove)) {
-    trackedTokens = trackedTokens.filter(t => t !== tokenToRemove);
-    fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n') + '\n');
-    delete lastSignatures[tokenToRemove];
-    bot.sendMessage(msg.chat.id, `❌ Token removed: ${tokenToRemove}`);
-  } else {
-    bot.sendMessage(msg.chat.id, `⚠️ Token not found in tracked list.`);
-  }
+  const token = match[1];
+  trackedTokens = trackedTokens.filter(t => t !== token);
+  fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n'));
+  bot.sendMessage(msg.chat.id, `❌ Token removed: ${token}`);
 });
 
 bot.onText(/\/list/, (msg) => {
@@ -176,4 +121,3 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
-
