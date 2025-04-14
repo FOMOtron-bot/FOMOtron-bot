@@ -20,35 +20,39 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
 let lastCheckedSignature = null;
 
 async function getBuyTransactions(token) {
-  const tokenPubkey = new PublicKey(token);
-  const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
+  try {
+    const tokenPubkey = new PublicKey(token);
+    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
 
-  for (const signatureInfo of signatures.reverse()) {
-    const { signature } = signatureInfo;
-    if (lastCheckedSignature === signature) continue;
-    lastCheckedSignature = signature;
+    for (const signatureInfo of signatures.reverse()) {
+      const { signature } = signatureInfo;
+      if (lastCheckedSignature === signature) continue;
+      lastCheckedSignature = signature;
 
-    const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-    if (!tx || !tx.meta || tx.meta.err) continue;
+      const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+      if (!tx || !tx.meta || tx.meta.err) continue;
 
-    const isBuy = tx.meta.postTokenBalances.some(balance =>
-      balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
-    );
-
-    if (isBuy) {
-      const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
-      const buyer = tx.transaction.message.accountKeys[0].toString();
-
-      const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
-      const data = await res.json();
-      const name = data?.pair?.baseToken?.symbol || 'Unknown';
-      const link = `https://dexscreener.com/solana/${token}`;
-
-      await bot.sendMessage(TELEGRAM_CHAT_ID,
-        `🟢 *Buy Detected!*\nToken: *${name}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
-        { parse_mode: 'Markdown' }
+      const isBuy = tx.meta.postTokenBalances.some(balance =>
+        balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
       );
+
+      if (isBuy) {
+        const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
+        const buyer = tx.transaction.message.accountKeys[0].toString();
+
+        const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
+        const data = await res.json();
+        const name = data?.pair?.baseToken?.symbol || 'Unknown';
+        const link = `https://dexscreener.com/solana/${token}`;
+
+        await bot.sendMessage(TELEGRAM_CHAT_ID,
+          `🟢 *Buy Detected!*\nToken: *${name}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
+          { parse_mode: 'Markdown' }
+        );
+      }
     }
+  } catch (err) {
+    console.error(`Error while processing token ${token}:`, err.message);
   }
 }
 
@@ -84,5 +88,8 @@ bot.onText(/\/list/, (msg) => {
   }
 });
 
+// Web routes for Render health checks
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
+app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
+
 app.listen(port, () => console.log(`Bot server live on port ${port}`));
