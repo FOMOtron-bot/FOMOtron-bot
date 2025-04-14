@@ -47,14 +47,14 @@ function isGibberish(str) {
   return !str || /[^\x20-\x7E]/.test(str) || str.length < 1 || str.length > 32;
 }
 
+function looksLikeAddress(str) {
+  return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
+}
+
 async function getTokenInfo(token) {
   const short = token.slice(0, 4).toUpperCase();
 
-  function looksLikeAddress(str) {
-    return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
-  }
-
-  // 1. Try Solana Token List
+  // 1. Solana Token List
   try {
     const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
       .then(res => res.json());
@@ -70,7 +70,7 @@ async function getTokenInfo(token) {
     console.error('Token list failed:', e.message);
   }
 
-  // 2. Try Metaplex Metadata
+  // 2. Metaplex Metadata
   try {
     const mintPubkey = new PublicKey(token);
     const [metadataPDA] = await PublicKey.findProgramAddress(
@@ -94,7 +94,7 @@ async function getTokenInfo(token) {
     console.error('Metaplex metadata failed:', e.message);
   }
 
-  // 3. Try DexScreener
+  // 3. DexScreener
   try {
     const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
     const data = await res.json();
@@ -110,7 +110,7 @@ async function getTokenInfo(token) {
     console.error('DexScreener fallback failed:', e.message);
   }
 
-  // 4. Try Birdeye
+  // 4. Birdeye
   try {
     const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
     const data = await res.json();
@@ -127,7 +127,6 @@ async function getTokenInfo(token) {
 
   // Final fallback
   return { name: 'Unverified', symbol: short };
-}
 }
 
 async function getBuyTransactions(token) {
@@ -196,9 +195,7 @@ bot.onText(/\/remove (.+)/, (msg, match) => {
   const tokenToRemove = match[1].trim();
   if (trackedTokens.includes(tokenToRemove)) {
     trackedTokens = trackedTokens.filter(t => t !== tokenToRemove);
-    fs.writeFileSync(trackedTokensFile, trackedTokens.join('
-') + '
-');
+    fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n') + '\n');
     bot.sendMessage(msg.chat.id, `❌ Token removed: ${tokenToRemove}`);
   } else {
     bot.sendMessage(msg.chat.id, `⚠️ Token not found in tracked list.`);
@@ -216,4 +213,3 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
-
