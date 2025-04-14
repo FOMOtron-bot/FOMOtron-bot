@@ -12,6 +12,7 @@ const port = process.env.PORT || 10000;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL;
+const RPC_URL = process.env.SOLANA_RPC_URL; // 🔥 Use private RPC
 
 let bot;
 
@@ -28,7 +29,7 @@ if (WEBHOOK_URL) {
   console.log(`🛠️ Bot running in POLLING mode`);
 }
 
-const connection = new Connection('https://api.mainnet-beta.solana.com');
+const connection = new Connection(RPC_URL); // ✅ use your QuickNode RPC
 const trackedTokensFile = './data/added_tokens.txt';
 
 let trackedTokens = fs.existsSync(trackedTokensFile)
