@@ -93,11 +93,22 @@ async function getTokenInfo(token) {
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
-    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
+    let before = undefined;
+    let allSignatures = [];
+    while (true) {
+      const batch = await connection.getSignaturesForAddress(tokenPubkey, { before, limit: 10 });
+      if (!batch.length) break;
+      before = batch[batch.length - 1].signature;
+      for (let sig of batch.reverse()) {
+        if (sig.signature === lastCheckedSignatures[token]) break;
+        allSignatures.push(sig);
+      }
+      if (batch.some(sig => sig.signature === lastCheckedSignatures[token])) break;
+    }
+    allSignatures.reverse();
 
-    for (const signatureInfo of signatures.reverse()) {
+    for (const signatureInfo of allSignatures) {
       const { signature } = signatureInfo;
-      if (lastCheckedSignatures[token] === signature) continue;
       lastCheckedSignatures[token] = signature;
       fs.writeFileSync(lastSignatureFile, JSON.stringify(lastCheckedSignatures, null, 2));
 
