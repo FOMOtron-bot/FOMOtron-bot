@@ -33,7 +33,7 @@ const connection = new Connection(RPC_URL);
 const trackedTokensFile = './data/added_tokens.txt';
 
 let trackedTokens = fs.existsSync(trackedTokensFile)
-  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean)
+  ? fs.readFileSync(trackedTokensFile, 'utf-8').split('\n').filter(Boolean).map(t => t.trim())
   : [];
 
 let lastCheckedSignature = null;
@@ -90,7 +90,7 @@ async function getTokenInfo(token) {
   }
 
   // Final fallback
-  return { name: 'Unlisted Token', symbol: short };
+  return { name: 'Unknown Token', symbol: short };
 }
 
 async function getBuyTransactions(token) {
@@ -161,10 +161,10 @@ bot.onText(/\/add (.+)/, (msg, match) => {
 });
 
 bot.onText(/\/remove (.+)/, (msg, match) => {
-  const token = match[1].trim();
-  trackedTokens = trackedTokens.filter(t => t.trim() !== token);
+  const tokenToRemove = match[1].trim();
+  trackedTokens = trackedTokens.map(t => t.trim()).filter(t => t !== tokenToRemove);
   fs.writeFileSync(trackedTokensFile, trackedTokens.join('\n'));
-  bot.sendMessage(msg.chat.id, `❌ Token removed: ${token}`);
+  bot.sendMessage(msg.chat.id, `❌ Token removed: ${tokenToRemove}`);
 });
 
 bot.onText(/\/list/, (msg) => {
