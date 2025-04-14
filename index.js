@@ -38,14 +38,35 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
 
 let lastCheckedSignature = null;
 
-async function getTokenInfoFromList(mint) {
+async function getTokenInfo(mintAddress) {
   try {
-    const res = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json');
-    const data = await res.json();
-    return data.tokens.find(t => t.address === mint) || null;
+    // Try token list first
+    const listRes = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json');
+    const tokenList = await listRes.json();
+    const match = tokenList.tokens.find(t => t.address === mintAddress);
+    if (match) return { symbol: match.symbol, name: match.name };
+
+    // Fallback: Try to get on-chain token metadata
+    const mintPubkey = new PublicKey(mintAddress);
+    const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
+    const parsed = mintInfo?.value?.data?.parsed?.info;
+
+    const decimals = parsed?.decimals;
+    const supply = parsed?.supply;
+    const defaultSymbol = mintAddress.slice(0, 4) + '...' + mintAddress.slice(-4);
+
+    return {
+      symbol: defaultSymbol,
+      name: defaultSymbol,
+      decimals: decimals,
+      supply: supply
+    };
   } catch (err) {
-    console.error('Token list lookup failed:', err.message);
-    return null;
+    console.error('Token symbol fallback failed:', err.message);
+    return {
+      symbol: mintAddress.slice(0, 4) + '...' + mintAddress.slice(-4),
+      name: mintAddress.slice(0, 4) + '...' + mintAddress.slice(-4)
+    };
   }
 }
 
@@ -70,9 +91,7 @@ async function getBuyTransactions(token) {
       const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
       const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
 
-      const tokenInfo = await getTokenInfoFromList(token);
-      const symbol = tokenInfo?.symbol || token.slice(0, 4) + '...' + token.slice(-4);
-      const name = tokenInfo?.name || symbol;
+      const { name, symbol } = await getTokenInfo(token);
 
       const dexsRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
       const dexsData = await dexsRes.json();
