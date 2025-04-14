@@ -38,16 +38,14 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
 
 let lastCheckedSignature = null;
 
-// 🔍 Pull token symbol from the official Solana token list
-async function getTokenName(mint) {
+async function getTokenInfoFromList(mint) {
   try {
     const res = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json');
     const data = await res.json();
-    const token = data.tokens.find(t => t.address === mint);
-    return token?.symbol || 'Unknown';
+    return data.tokens.find(t => t.address === mint) || null;
   } catch (err) {
-    console.error("Token name lookup failed:", err.message);
-    return 'Unknown';
+    console.error('Token list lookup failed:', err.message);
+    return null;
   }
 }
 
@@ -70,30 +68,41 @@ async function getBuyTransactions(token) {
       const solSpent = ((preSol - postSol) / 1e9).toFixed(4);
 
       const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
-      const tokenAmount = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
-      const tokenSymbol = await getTokenName(token);
-      const displaySymbol = tokenSymbol !== 'Unknown' ? tokenSymbol : token.slice(0, 4) + '...' + token.slice(-4);
-      const link = `https://dexscreener.com/solana/${token}`;
+      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
 
-      if (parseFloat(solSpent) > 0 && tokenAmount !== 'unknown') {
-        await bot.sendMessage(TELEGRAM_CHAT_ID,
-          `🟢 *${displaySymbol} Buy!*
+      const tokenInfo = await getTokenInfoFromList(token);
+      const symbol = tokenInfo?.symbol || token.slice(0, 4) + '...' + token.slice(-4);
+      const name = tokenInfo?.name || symbol;
+
+      const dexsRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
+      const dexsData = await dexsRes.json();
+      const pair = dexsData?.pair || {};
+      const priceUsd = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
+      const marketCap = pair.fdv ? `$${parseInt(pair.fdv).toLocaleString()}` : 'N/A';
+      const position = pair.rank ? `#${pair.rank}` : 'N/A';
+      const txnLink = `https://solscan.io/tx/${signature}`;
+
+      const message =
+        `💥 *${name} [${symbol}]* 🛒 *Buy!*
+\n` +
+        `🪙 *${solSpent} SOL*
 ` +
-          `💰 *${solSpent} SOL → ${tokenAmount} ${displaySymbol}*
+        `📦 *Got:* ${amountReceived} ${symbol}
 ` +
-          `👤 Buyer: \`${buyer}\`
+        `🔗 [Buyer | Txn](${txnLink})
 ` +
-          `📊 [View on DexScreener](${link})`,
-          { parse_mode: 'Markdown' }
-        );
-      }
+        `📊 *Position:* ${position}
+` +
+        `💰 *Market Cap:* ${marketCap}
+`;
+
+      await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
     }
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
   }
 }
 
-// ⏱ Faster buy check (every 3 seconds)
 setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
@@ -129,3 +138,4 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
+
