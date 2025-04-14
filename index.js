@@ -64,22 +64,26 @@ async function getBuyTransactions(token) {
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
 
-      const isBuy = tx.meta?.postTokenBalances?.some(balance =>
-        balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
-      );
+      const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+      const preSol = tx.meta?.preBalances?.[0] || 0;
+      const postSol = tx.meta?.postBalances?.[0] || 0;
+      const solSpent = ((preSol - postSol) / 1e9).toFixed(4);
 
-      if (isBuy) {
-        const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
+      const tokenAmount = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
+      const tokenSymbol = await getTokenName(token);
+      const displaySymbol = tokenSymbol !== 'Unknown' ? tokenSymbol : token.slice(0, 4) + '...' + token.slice(-4);
+      const link = `https://dexscreener.com/solana/${token}`;
 
-        const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
-        const amount = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
-
-        const name = await getTokenName(token);
-        const displayName = name !== 'Unknown' ? name : token.slice(0, 4) + '...' + token.slice(-4);
-        const link = `https://dexscreener.com/solana/${token}`;
-
+      if (parseFloat(solSpent) > 0 && tokenAmount !== 'unknown') {
         await bot.sendMessage(TELEGRAM_CHAT_ID,
-          `🟢 *Buy Detected!*\nToken: *${displayName}*\nBuyer: \`${buyer}\`\nAmount: *${amount}*\n[View on DexScreener](${link})`,
+          `🟢 *${displaySymbol} Buy!*
+` +
+          `💰 *${solSpent} SOL → ${tokenAmount} ${displaySymbol}*
+` +
+          `👤 Buyer: \`${buyer}\`
+` +
+          `📊 [View on DexScreener](${link})`,
           { parse_mode: 'Markdown' }
         );
       }
@@ -125,4 +129,3 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
-
