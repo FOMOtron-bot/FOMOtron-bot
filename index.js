@@ -32,13 +32,13 @@ async function getBuyTransactions(token) {
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
 
-      const isBuy = tx.meta.postTokenBalances.some(balance =>
+      const isBuy = tx.meta?.postTokenBalances?.some(balance =>
         balance.mint === token && parseInt(balance.uiTokenAmount.amount) > 0
       );
 
       if (isBuy) {
         const amount = tx.meta.postTokenBalances.find(b => b.mint === token)?.uiTokenAmount.uiAmount;
-        const buyer = tx.transaction.message.accountKeys[0].toString();
+        const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
 
         const res = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${token}`);
         const data = await res.json();
