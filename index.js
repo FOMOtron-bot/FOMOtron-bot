@@ -114,7 +114,7 @@ async function getBuyTransactions(token) {
     for (const signatureInfo of signatures.reverse()) {
       const { signature, blockTime } = signatureInfo;
       if (signature === lastSig) break;
-      if (!blockTime || (now - blockTime * 1000 > 60000)) continue; // older than 60 seconds
+      if (!blockTime || (now - blockTime * 1000 > 15000)) continue; // Allow transactions within 15 seconds
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -152,7 +152,7 @@ setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
   });
-}, 3000);
+}, 15000);  // Fetch transactions every 15 seconds
 
 bot.onText(/\/add (.+)/, (msg, match) => {
   const token = match[1].trim();
@@ -183,4 +183,3 @@ bot.onText(/\/list/, (msg) => {
 app.get('/', (_, res) => res.send('Solana Buy Bot is running.'));
 app.get('/health', (req, res) => res.send('FOMOtron is alive!'));
 app.listen(port, () => console.log(`🌐 Server listening on port ${port}`));
-
