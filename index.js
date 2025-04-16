@@ -107,14 +107,13 @@ async function getTokenInfo(token) {
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
-    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
     const lastSig = lastCheckedSignatures.get(token);
-    const now = Date.now();
+    const options = lastSig ? { until: lastSig, limit: 10 } : { limit: 10 };
+    const signatures = await connection.getSignaturesForAddress(tokenPubkey, options);
 
     for (const signatureInfo of signatures.reverse()) {
       const { signature, blockTime } = signatureInfo;
-      if (signature === lastSig) break;
-      if (!blockTime || (now - blockTime * 1000 > 60000)) continue; // older than 60 seconds
+      if (!blockTime) continue;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -138,10 +137,8 @@ async function getBuyTransactions(token) {
         `🔗 [Buyer | Txn](${txnLink})`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
-    }
 
-    if (signatures.length > 0) {
-      lastCheckedSignatures.set(token, signatures[0].signature);
+      lastCheckedSignatures.set(token, signature);
     }
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
