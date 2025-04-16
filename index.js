@@ -104,29 +104,17 @@ async function getTokenInfo(token) {
   return { name: 'Unverified', symbol: short };
 }
 
-async function getSolPrice() {
-  try {
-    const res = await fetch('https://quote-api.jup.ag/v6/price?ids=SOL');
-    const data = await res.json();
-    return data?.data?.SOL?.price || 0;
-  } catch (e) {
-    console.error('Failed to fetch SOL price:', e.message);
-    return 0;
-  }
-}
-
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
     const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 10 });
     const lastSig = lastCheckedSignatures.get(token);
     const now = Date.now();
-    const solPrice = await getSolPrice();
 
     for (const signatureInfo of signatures.reverse()) {
       const { signature, blockTime } = signatureInfo;
       if (signature === lastSig) break;
-      if (!blockTime || (now - blockTime * 1000 > 60000)) continue; // older than 60s
+      if (!blockTime || (now - blockTime * 1000 > 60000)) continue; // older than 60 seconds
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -135,8 +123,7 @@ async function getBuyTransactions(token) {
       const preSol = tx.meta?.preBalances?.[0] || 0;
       const postSol = tx.meta?.postBalances?.[0] || 0;
       const solSpent = (preSol - postSol) / 1e9;
-      const usdValue = solSpent * solPrice;
-      if (usdValue < 10) continue;
+      if (solSpent < 0.001) continue;
 
       const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
       const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
@@ -146,7 +133,7 @@ async function getBuyTransactions(token) {
 
       const message =
         `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
-        `🪙 *${solSpent.toFixed(4)} SOL ($${usdValue.toFixed(2)})*\n` +
+        `🪙 *${solSpent.toFixed(4)} SOL*\n` +
         `📦 *Got:* ${amountReceived} ${symbol}\n` +
         `🔗 [Buyer | Txn](${txnLink})`;
 
@@ -165,7 +152,7 @@ setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
   });
-}, 15000);
+}, 3000);
 
 bot.onText(/\/add (.+)/, (msg, match) => {
   const token = match[1].trim();
