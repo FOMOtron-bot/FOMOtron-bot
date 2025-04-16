@@ -108,17 +108,16 @@ async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
     const lastSig = lastCheckedSignatures.get(token);
-    const options = lastSig ? { until: lastSig, limit: 10 } : { limit: 10 };
+    const options = lastSig ? { limit: 10, until: lastSig } : { limit: 10 };
     const signatures = await connection.getSignaturesForAddress(tokenPubkey, options);
 
     for (const signatureInfo of signatures.reverse()) {
-      const { signature, blockTime } = signatureInfo;
-      if (!blockTime) continue;
+      const { signature } = signatureInfo;
 
-      const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+      const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
 
-      const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+      const buyer = tx.transaction?.message?.accountKeys?.[0]?.pubkey.toString() || 'unknown';
       const preSol = tx.meta?.preBalances?.[0] || 0;
       const postSol = tx.meta?.postBalances?.[0] || 0;
       const solSpent = (preSol - postSol) / 1e9;
@@ -137,7 +136,6 @@ async function getBuyTransactions(token) {
         `🔗 [Buyer | Txn](${txnLink})`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
-
       lastCheckedSignatures.set(token, signature);
     }
   } catch (err) {
