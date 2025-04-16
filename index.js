@@ -37,7 +37,6 @@ let trackedTokens = fs.existsSync(trackedTokensFile)
   : [];
 
 const lastCheckedSignatures = new Map();
-const processedSignatures = new Set();
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 function cleanString(buffer) {
@@ -52,17 +51,6 @@ function looksLikeAddress(str) {
   return /^([A-HJ-NP-Za-km-z1-9]{32,44})$/.test(str);
 }
 
-async function getSolPrice() {
-  try {
-    const res = await fetch('https://quote-api.jup.ag/v6/price?ids=SOL');
-    const data = await res.json();
-    return data?.data?.SOL?.price || 0;
-  } catch (e) {
-    console.error('Failed to fetch SOL price:', e.message);
-    return 0;
-  }
-}
-
 async function getTokenInfo(token) {
   const short = token.slice(0, 4).toUpperCase();
 
@@ -71,20 +59,25 @@ async function getTokenInfo(token) {
     const data = await res.json();
     const pair = data.pairs?.[0]?.baseToken;
     if (pair?.name && pair?.symbol) return { name: pair.name, symbol: pair.symbol };
-  } catch {}
+  } catch (e) {
+    console.error('DexScreener token endpoint failed:', e.message);
+  }
 
   try {
     const tokenList = await fetch('https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/solana.tokenlist.json')
       .then(res => res.json());
     const found = tokenList.tokens.find(t => t.address === token);
     if (found) return { name: found.name, symbol: found.symbol };
-  } catch {}
+  } catch (e) {
+    console.error('Token list failed:', e.message);
+  }
 
   try {
     const mintPubkey = new PublicKey(token);
-    const [metadataPDA] = await PublicKey.findProgramAddress([
-      Buffer.from('metadata'), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()
-    ], METADATA_PROGRAM_ID);
+    const [metadataPDA] = await PublicKey.findProgramAddress(
+      [Buffer.from('metadata'), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
+      METADATA_PROGRAM_ID
+    );
     const metadataAccount = await connection.getAccountInfo(metadataPDA);
     if (metadataAccount) {
       const data = metadataAccount.data;
@@ -94,7 +87,9 @@ async function getTokenInfo(token) {
       let symbol = cleanString(symbolRaw);
       if (!isGibberish(name) && !isGibberish(symbol)) return { name, symbol };
     }
-  } catch {}
+  } catch (e) {
+    console.error('Metaplex metadata failed:', e.message);
+  }
 
   try {
     const res = await fetch(`https://public-api.birdeye.so/public/token/${token}`);
@@ -102,20 +97,54 @@ async function getTokenInfo(token) {
     if (data?.data?.name && data?.data?.symbol) {
       return { name: data.data.name, symbol: data.data.symbol };
     }
-  } catch {}
+  } catch (e) {
+    console.error('Birdeye fallback failed:', e.message);
+  }
 
   return { name: 'Unverified', symbol: short };
+}
+
+async function getSolPrice() {
+  try {
+    const res = await fetch('https://quote-api.jup.ag/v6/price?ids=SOL');
+    const text = await res.text();
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch (jsonError) {
+      console.warn("Jupiter returned invalid JSON:", text);
+      throw new Error("Jupiter response not JSON");
+    }
+
+    const price = data?.data?.SOL?.price;
+    if (price) return price;
+
+    throw new Error("Jupiter price missing");
+  } catch (err) {
+    console.warn("⚠️ Jupiter failed:", err.message);
+
+    try {
+      const backup = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+      const fallbackData = await backup.json();
+      return fallbackData?.solana?.usd || 0;
+    } catch (fallbackError) {
+      console.error("❌ Both APIs failed:", fallbackError.message);
+      return 0;
+    }
+  }
 }
 
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
-    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 5 });
+    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 20 });
+    const lastSig = lastCheckedSignatures.get(token);
     const solPrice = await getSolPrice();
 
     for (const signatureInfo of signatures.reverse()) {
-      const { signature, blockTime } = signatureInfo;
-      if (processedSignatures.has(signature)) continue;
+      const { signature } = signatureInfo;
+      if (signature === lastSig) break;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -140,7 +169,6 @@ async function getBuyTransactions(token) {
         `🔗 [Buyer | Txn](${txnLink})`;
 
       await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
-      processedSignatures.add(signature);
     }
 
     if (signatures.length > 0) {
@@ -155,7 +183,7 @@ setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
   });
-}, 3000);
+}, 5000);
 
 bot.onText(/\/add (.+)/, (msg, match) => {
   const token = match[1].trim();
