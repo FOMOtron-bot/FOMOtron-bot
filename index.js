@@ -104,73 +104,37 @@ async function getTokenInfo(token) {
   return { name: 'Unverified', symbol: short };
 }
 
-async function getSolPrice() {
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-    const data = await res.json();
-    if (data?.solana?.usd) return data.solana.usd;
-    console.warn('⚠️ CoinGecko returned no price');
-  } catch (e) {
-    console.error('❌ CoinGecko failed:', e.message);
-  }
-
-  try {
-    const res = await fetch('https://quote-api.jup.ag/v6/price?ids=SOL');
-    const text = await res.text();
-    try {
-      const data = JSON.parse(text);
-      return data?.data?.SOL?.price || 0;
-    } catch {
-      console.warn('⚠️ Jupiter failed: Jupiter response not JSON');
-    }
-  } catch (e) {
-    console.error('❌ Jupiter fetch failed:', e.message);
-  }
-
-  return 0;
-}
-
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
-    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 20 });
+    const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 1 });
     const lastSig = lastCheckedSignatures.get(token);
-    const now = Date.now();
-    const solPrice = await getSolPrice();
+    if (!signatures.length || signatures[0].signature === lastSig) return;
 
-    for (const signatureInfo of signatures.reverse()) {
-      const { signature, blockTime } = signatureInfo;
-      if (signature === lastSig) break;
-      if (!blockTime || (now - blockTime * 1000 > 45000)) continue;
+    const { signature } = signatures[0];
+    const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+    if (!tx || !tx.meta || tx.meta.err) return;
 
-      const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-      if (!tx || !tx.meta || tx.meta.err) continue;
+    const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
+    const preSol = tx.meta?.preBalances?.[0] || 0;
+    const postSol = tx.meta?.postBalances?.[0] || 0;
+    const solSpent = (preSol - postSol) / 1e9;
+    if (solSpent < 0.05) return; // Skip buys under $5 (approx.)
 
-      const buyer = tx.transaction?.message?.accountKeys?.[0]?.toString() || 'unknown';
-      const preSol = tx.meta?.preBalances?.[0] || 0;
-      const postSol = tx.meta?.postBalances?.[0] || 0;
-      const solSpent = (preSol - postSol) / 1e9;
-      const usdValue = solSpent * solPrice;
-      if (usdValue < 5) continue;
+    const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
+    const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
 
-      const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
-      const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
+    const { name, symbol } = await getTokenInfo(token);
+    const txnLink = `https://solscan.io/tx/${signature}`;
 
-      const { name, symbol } = await getTokenInfo(token);
-      const txnLink = `https://solscan.io/tx/${signature}`;
+    const message =
+      `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
+      `🪙 *${solSpent.toFixed(4)} SOL*\n` +
+      `📦 *Got:* ${amountReceived} ${symbol}\n` +
+      `🔗 [Buyer | Txn](${txnLink})`;
 
-      const message =
-        `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
-        `🪙 *${solSpent.toFixed(4)} SOL ($${usdValue.toFixed(2)})*\n` +
-        `📦 *Got:* ${amountReceived} ${symbol}\n` +
-        `🔗 [Buyer | Txn](${txnLink})`;
-
-      await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
-    }
-
-    if (signatures.length > 0) {
-      lastCheckedSignatures.set(token, signatures[0].signature);
-    }
+    await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
+    lastCheckedSignatures.set(token, signature);
   } catch (err) {
     console.error(`Error while processing token ${token}:`, err.message);
   }
