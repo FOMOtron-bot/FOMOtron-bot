@@ -106,33 +106,28 @@ async function getTokenInfo(token) {
 
 async function getSolPrice() {
   try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const data = await res.json();
+    if (data?.solana?.usd) return data.solana.usd;
+    console.warn('⚠️ CoinGecko returned no price');
+  } catch (e) {
+    console.error('❌ CoinGecko failed:', e.message);
+  }
+
+  try {
     const res = await fetch('https://quote-api.jup.ag/v6/price?ids=SOL');
     const text = await res.text();
-    let data;
-
     try {
-      data = JSON.parse(text);
-    } catch (jsonError) {
-      console.warn("Jupiter returned invalid JSON:", text);
-      throw new Error("Jupiter response not JSON");
+      const data = JSON.parse(text);
+      return data?.data?.SOL?.price || 0;
+    } catch {
+      console.warn('⚠️ Jupiter failed: Jupiter response not JSON');
     }
-
-    const price = data?.data?.SOL?.price;
-    if (price) return price;
-
-    throw new Error("Jupiter price missing");
-  } catch (err) {
-    console.warn("⚠️ Jupiter failed:", err.message);
-
-    try {
-      const backup = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-      const fallbackData = await backup.json();
-      return fallbackData?.solana?.usd || 0;
-    } catch (fallbackError) {
-      console.error("❌ Both APIs failed:", fallbackError.message);
-      return 0;
-    }
+  } catch (e) {
+    console.error('❌ Jupiter fetch failed:', e.message);
   }
+
+  return 0;
 }
 
 async function getBuyTransactions(token) {
@@ -140,11 +135,13 @@ async function getBuyTransactions(token) {
     const tokenPubkey = new PublicKey(token);
     const signatures = await connection.getSignaturesForAddress(tokenPubkey, { limit: 20 });
     const lastSig = lastCheckedSignatures.get(token);
+    const now = Date.now();
     const solPrice = await getSolPrice();
 
     for (const signatureInfo of signatures.reverse()) {
-      const { signature } = signatureInfo;
+      const { signature, blockTime } = signatureInfo;
       if (signature === lastSig) break;
+      if (!blockTime || (now - blockTime * 1000 > 45000)) continue;
 
       const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
       if (!tx || !tx.meta || tx.meta.err) continue;
@@ -183,7 +180,7 @@ setInterval(() => {
   trackedTokens.forEach(token => {
     getBuyTransactions(token).catch(console.error);
   });
-}, 5000);
+}, 3000);
 
 bot.onText(/\/add (.+)/, (msg, match) => {
   const token = match[1].trim();
