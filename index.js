@@ -104,6 +104,37 @@ async function getTokenInfo(token) {
   return { name: 'Unverified', symbol: short };
 }
 
+async function getSolPrice() {
+  try {
+    const res = await fetch('https://quote-api.jup.ag/v6/price?ids=SOL');
+    const text = await res.text();
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch (jsonError) {
+      console.warn("Jupiter returned invalid JSON:", text);
+      throw new Error("Jupiter response not JSON");
+    }
+
+    const price = data?.data?.SOL?.price;
+    if (price) return price;
+
+    throw new Error("Jupiter price missing");
+  } catch (err) {
+    console.warn("⚠️ Jupiter failed:", err.message);
+
+    try {
+      const backup = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+      const fallbackData = await backup.json();
+      return fallbackData?.solana?.usd || 0;
+    } catch (fallbackError) {
+      console.error("❌ Both APIs failed:", fallbackError.message);
+      return 0;
+    }
+  }
+}
+
 async function getBuyTransactions(token) {
   try {
     const tokenPubkey = new PublicKey(token);
@@ -119,7 +150,10 @@ async function getBuyTransactions(token) {
     const preSol = tx.meta?.preBalances?.[0] || 0;
     const postSol = tx.meta?.postBalances?.[0] || 0;
     const solSpent = (preSol - postSol) / 1e9;
-    if (solSpent < 0.05) return; // Skip buys under $5 (approx.)
+
+    const solPrice = await getSolPrice();
+    const usdValue = solSpent * solPrice;
+    if (usdValue < 5) return;
 
     const postBalance = tx.meta?.postTokenBalances?.find(b => b.mint === token);
     const amountReceived = postBalance?.uiTokenAmount?.uiAmountString || 'unknown';
@@ -129,7 +163,7 @@ async function getBuyTransactions(token) {
 
     const message =
       `💥 *${name} [${symbol}]* 🛒 *Buy!*\n\n` +
-      `🪙 *${solSpent.toFixed(4)} SOL*\n` +
+      `🪙 *${solSpent.toFixed(4)} SOL ($${usdValue.toFixed(2)})*\n` +
       `📦 *Got:* ${amountReceived} ${symbol}\n` +
       `🔗 [Buyer | Txn](${txnLink})`;
 
